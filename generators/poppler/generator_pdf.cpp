@@ -32,6 +32,7 @@
 #include <QTextStream>
 #include <QTimeZone>
 #include <QTimer>
+#include <QVector>
 #include <QXmlStreamReader>
 
 #include <KAboutData>
@@ -67,6 +68,136 @@
 #include <functional>
 
 Q_DECLARE_METATYPE(Poppler::Annotation *)
+
+// --- Bidi text reordering for RTL support ---
+// Poppler returns text in visual (display) order. For RTL scripts
+// (Arabic, Persian, Hebrew), this means characters are stored
+// left-to-right but should be read right-to-left.
+// This function reorders text from visual to logical order using
+// a simplified Unicode Bidirectional Algorithm.
+
+// Check if character has RTL direction
+static bool isRtlChar(QChar c)
+{
+    const QChar::Direction d = c.direction();
+    return d == QChar::DirR || d == QChar::DirAL;
+}
+
+// Returns true if string contains any RTL characters
+static bool hasRtlChars(const QString &str)
+{
+    for (int i = 0; i < str.length(); i++) {
+        if (isRtlChar(str.at(i))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Determine primary direction from first strong character
+static bool isPrimaryRtl(const QString &str)
+{
+    for (int i = 0; i < str.length(); i++) {
+        const QChar::Direction d = str.at(i).direction();
+        if (d == QChar::DirR || d == QChar::DirAL) {
+            return true;
+        }
+        if (d == QChar::DirL) {
+            return false;
+        }
+    }
+    return false;
+}
+
+// Result of bidi reordering: the reordered text, and a mapping from
+// logical character positions to original visual positions.
+struct BidiResult {
+    QString text;
+    QVector<int> logicalToVisual; // logical_position -> visual_position
+};
+
+// Reorder text from visual (display) order to logical (reading) order.
+// Handles both primary-LTR and primary-RTL runs.
+// Returns the reordered text and visual position mapping for bounding boxes.
+static BidiResult reorderVisualToLogical(const QString &visual)
+{
+    BidiResult result;
+    const int len = visual.length();
+
+    if (len <= 1 || !hasRtlChars(visual)) {
+        // LTR-only: no reordering needed
+        result.text = visual;
+        result.logicalToVisual.resize(len);
+        for (int i = 0; i < len; i++) {
+            result.logicalToVisual[i] = i;
+        }
+        return result;
+    }
+
+    const bool primaryRtl = isPrimaryRtl(visual);
+    QString reordered;
+    reordered.reserve(len);
+    QVector<int> mapping;
+    mapping.reserve(len);
+
+    if (!primaryRtl) {
+        // Primary LTR: scan forward, output LTR runs as-is,
+        // reverse RTL runs
+        int i = 0;
+        while (i < len) {
+            // Output LTR run as-is
+            while (i < len && !isRtlChar(visual.at(i))) {
+                reordered += visual.at(i);
+                mapping.append(i);
+                i++;
+            }
+            // Find end of RTL run
+            int j = i;
+            while (j < len && isRtlChar(visual.at(j))) {
+                j++;
+            }
+            // Output RTL run in reverse
+            if (j > i) {
+                for (int k = j - 1; k >= i; k--) {
+                    reordered += visual.at(k);
+                    mapping.append(k);
+                }
+                i = j;
+            }
+        }
+    } else {
+        // Primary RTL: scan backward, output RTL runs
+        // (reading order = reverse of visual for RTL chars),
+        // keep LTR runs in order
+        int i = len - 1;
+        while (i >= 0) {
+            // Output RTL run (already in reading order from backward scan)
+            while (i >= 0 && isRtlChar(visual.at(i))) {
+                reordered += visual.at(i);
+                mapping.append(i);
+                i--;
+            }
+            // Find start of LTR run (going backward)
+            int j = i;
+            while (j >= 0 && !isRtlChar(visual.at(j))) {
+                j--;
+            }
+            // Output LTR run in original order
+            if (j < i) {
+                for (int k = j + 1; k <= i; k++) {
+                    reordered += visual.at(k);
+                    mapping.append(k);
+                }
+                i = j;
+            }
+        }
+    }
+
+    result.text = reordered;
+    result.logicalToVisual = mapping;
+    return result;
+}
+// --- End bidi reordering ---
 Q_DECLARE_METATYPE(Poppler::FontInfo)
 
 static const int defaultPageWidth = 595;
@@ -1840,29 +1971,109 @@ Okular::TextPage *PDFGenerator::abstractTextPage(const std::vector<std::unique_p
 #ifdef PDFGENERATOR_DEBUG
     qCDebug(OkularPdfDebug) << "getting text page in generator pdf - rotation:" << rot;
 #endif
-    QString s;
-    bool addChar;
     for (const auto &word : text) {
-        const int qstringCharCount = word->text().length();
+        const QString wordText = word->text();
         next = word->nextWord();
-        int textBoxChar = 0;
-        for (int j = 0; j < qstringCharCount; j++) {
-            const QChar c = word->text().at(j);
-            if (c.isHighSurrogate()) {
-                s = c;
-                addChar = false;
-            } else if (c.isLowSurrogate()) {
-                s += c;
-                addChar = true;
+
+        // Extract characters from the word with their bounding boxes,
+        // handling surrogate pairs correctly.
+        struct CharWithBBox {
+            QString text;
+            QRectF bbox;
+        };
+        QVector<CharWithBBox> chars;
+        int charIndex = 0; // Poppler character index (for charBoundingBox)
+        for (int j = 0; j < wordText.length(); ) {
+            QString ch;
+            if (wordText.at(j).isHighSurrogate() && j + 1 < wordText.length()) {
+                ch = QString(wordText.at(j)) + wordText.at(j + 1);
+                j += 2;
             } else {
-                s = c;
-                addChar = true;
+                ch = wordText.at(j);
+                j++;
+            }
+            chars.append({ch, word->charBoundingBox(charIndex)});
+            charIndex++;
+        }
+
+        // Build a plain string for bidi analysis
+        QString visualStr;
+        for (const auto &c : chars) {
+            visualStr += c.text;
+        }
+
+        // Reorder if RTL characters are present
+        if (hasRtlChars(visualStr)) {
+            BidiResult bidi = reorderVisualToLogical(visualStr);
+
+            // Build character-level mapping from QChar-level mapping.
+            // We need: for each logical character position, what was
+            // the visual character position.
+            QVector<int> logicalCharToVisualChar(chars.size());
+            int logicalCharIdx = 0;
+            int logicalQCharOffset = 0;
+            for (int ci = 0; ci < chars.size(); ci++) {
+                // Map the first QChar of this character
+                int visualQCharPos = bidi.logicalToVisual.value(logicalQCharOffset, logicalQCharOffset);
+
+                // Find which visual character contains this QChar position
+                int visualCharIdx = 0;
+                int visualQCharCount = 0;
+                for (int vi = 0; vi < chars.size(); vi++) {
+                    int clen = chars[vi].text.length(); // QChar count for this char
+                    if (visualQCharPos >= visualQCharCount && visualQCharPos < visualQCharCount + clen) {
+                        visualCharIdx = vi;
+                        break;
+                    }
+                    visualQCharCount += clen;
+                }
+                logicalCharToVisualChar[ci] = visualCharIdx;
+
+                // Advance logical QChar position past this character
+                logicalQCharOffset += chars[ci].text.length();
             }
 
-            if (addChar) {
-                QRectF charBBox = word->charBoundingBox(textBoxChar);
-                append(ktp, (j == qstringCharCount - 1 && !next) ? (s + QLatin1Char('\n')) : s, charBBox.left() / width, charBBox.bottom() / height, charBBox.right() / width, charBBox.top() / height);
-                textBoxChar++;
+            // Build reordered character list
+            QVector<CharWithBBox> reorderedChars(chars.size());
+            for (int i = 0; i < chars.size(); i++) {
+                int visIdx = logicalCharToVisualChar[i];
+                reorderedChars[i].text = chars[visIdx].text;
+                reorderedChars[i].bbox = chars[visIdx].bbox;
+            }
+
+            // Output reordered characters
+            for (int i = 0; i < reorderedChars.size(); i++) {
+                const QRectF &cb = reorderedChars[i].bbox;
+                QString outText = reorderedChars[i].text;
+                // Add newline to last character of last word
+                if (i == reorderedChars.size() - 1 && !next) {
+                    outText += QLatin1Char('\n');
+                }
+                append(ktp, outText, cb.left() / width, cb.bottom() / height, cb.right() / width, cb.top() / height);
+            }
+        } else {
+            // LTR-only: original code path (unchanged)
+            QString s;
+            bool addChar;
+            int textBoxChar = 0;
+            for (int j = 0; j < visualStr.length(); j++) {
+                const QChar c = visualStr.at(j);
+                if (c.isHighSurrogate()) {
+                    s = c;
+                    addChar = false;
+                } else if (c.isLowSurrogate()) {
+                    s += c;
+                    addChar = true;
+                } else {
+                    s = c;
+                    addChar = true;
+                }
+
+                if (addChar) {
+                    QRectF charBBox = word->charBoundingBox(textBoxChar);
+                    append(ktp, (j == visualStr.length() - 1 && !next) ? (s + QLatin1Char('\n')) : s, charBBox.left() / width, charBBox.bottom() / height, charBBox.right() / width, charBBox.top() / height);
+                    textBoxChar++;
+                }
             }
         }
 
