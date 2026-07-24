@@ -9,21 +9,15 @@ These bugs have been open since **2009** (KDE bugs [#184399](https://bugs.kde.or
 
 ---
 
-## What This Fixes
+## What's Fixed
 
-For PDFs containing **Persian, Arabic, or Hebrew** text, this fix ensures:
+| Issue | Status | Branch |
+|-------|--------|--------|
+| Copying Persian/Arabic/Hebrew text (was backwards) | ✅ Fixed | `master` |
+| Searching Persian/Arabic/Hebrew text (had to type backwards) | ✅ Fixed | `master` |
+| **Text selection drag direction for RTL** (selection produced visual order) | ✅ **Fixed (v1)** | **`rtl-selection-fix`** |
 
-- ✅ Copy/paste produces correctly-ordered logical text
-- ✅ Search works with normal (un-reversed) input
-- ✅ Mixed Persian + English text is rendered/copied correctly
-- ✅ LTR (English, etc.) text is completely unchanged
-- ✅ Text selection highlighting still works (bounding boxes correctly mapped)
-
-### Example
-
-**Before this fix**, copying the Persian word "کتاب" (ketab = book) gave: `باتک`
-
-**After this fix**, copying the same word gives: `کتاب` ✓
+For the RTL selection fix (v1), see `plan-selection-detail.md`, `RESEARCH_REPORT_RTL_SELECTION.md`, and `RESEARCH_REPORT_OTHER_READERS.md`. The fix is in `core/textpage.cpp::makeAndSortLines()` and adds per-line direction detection. Tested in a VNC container with a real 14 MB Persian PDF: single-word, multi-word, and ZWNJ-preservation all work correctly.
 
 ---
 
