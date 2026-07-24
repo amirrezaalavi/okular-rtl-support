@@ -910,6 +910,54 @@ static bool compareTinyTextEntityX(const WordWithCharacters &first, const WordWi
     return firstArea.left() < secondArea.left();
 }
 
+// --- RTL support: per-line direction detection and reverse comparator ---
+
+// Direction of a line, used to decide whether to sort words left-to-right
+// or right-to-left. A line is RTL if it has more strong-RTL characters
+// (Arabic, Hebrew, etc.) than strong-LTR (Latin, CJK).
+enum class LineDirection { LTR, RTL };
+
+// Counts strong bidi character classes in a line to determine its primary
+// direction. Uses QChar::direction() which returns Unicode bidi class.
+// "Strong" classes: DirL (LTR), DirR (RTL), DirAL (Arabic Letter).
+// Numbers (DirEN/DirAN) and neutrals are ignored for direction detection
+// because a line of mostly numbers has no clear direction.
+static LineDirection detectLineDirection(const WordsWithCharacters &line)
+{
+    int rtlCount = 0;
+    int ltrCount = 0;
+    for (const WordWithCharacters &wwc : line) {
+        const QString &text = wwc.word.text();
+        for (QChar c : text) {
+            switch (c.direction()) {
+            case QChar::DirR:   // Right-to-Left (Hebrew, etc.)
+            case QChar::DirAL:  // Right-to-Left Arabic
+                ++rtlCount;
+                break;
+            case QChar::DirL:   // Left-to-Right (Latin, etc.)
+                ++ltrCount;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    // RTL wins on tie, because Arabic/Hebrew are predominantly RTL
+    // even when balanced with embedded Latin words.
+    return (rtlCount >= ltrCount) ? LineDirection::RTL : LineDirection::LTR;
+}
+
+// Reverse comparator: puts rightmost words first. Used for RTL lines
+// so that the word at the right edge of the line (which is the FIRST
+// word in reading order for RTL scripts) appears at the start of m_words.
+static bool compareTinyTextEntityXReverse(const WordWithCharacters &first, const WordWithCharacters &second)
+{
+    QRect firstArea = first.area().roundedGeometry(1000, 1000);
+    QRect secondArea = second.area().roundedGeometry(1000, 1000);
+
+    return firstArea.left() > secondArea.left();
+}
+
 static bool compareTinyTextEntityY(const WordWithCharacters &first, const WordWithCharacters &second)
 {
     const QRect firstArea = first.area().roundedGeometry(1000, 1000);
@@ -1114,7 +1162,17 @@ QList<QPair<WordsWithCharacters, QRect>> makeAndSortLines(const WordsWithCharact
     // Step 3
     for (QPair<WordsWithCharacters, QRect> &line : lines) {
         WordsWithCharacters &list = line.first;
-        std::sort(list.begin(), list.end(), compareTinyTextEntityX);
+        // RTL support: per-line direction detection. For RTL lines
+        // (Arabic, Hebrew, Persian), sort words from RIGHT to LEFT
+        // so that the first word in m_words is the first word in
+        // reading order. The bounding boxes stay in their original
+        // visual positions; only the iteration order changes.
+        const LineDirection dir = detectLineDirection(list);
+        if (dir == LineDirection::RTL) {
+            std::sort(list.begin(), list.end(), compareTinyTextEntityXReverse);
+        } else {
+            std::sort(list.begin(), list.end(), compareTinyTextEntityX);
+        }
     }
     lines.shrink_to_fit();
 

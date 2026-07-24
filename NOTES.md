@@ -94,3 +94,51 @@ Top 3 to watch:
 - **v2**: per-TextEntity direction field — matches PDF.js, most correct
 
 The original plan still stands for v1. Industry research validated the approach direction.
+
+### Step 7 — Implementing v1
+**Date:** 2026-07-24
+**Action:** Per-line sort inversion in `makeAndSortLines()`.
+
+**Code change plan**:
+1. Add `LineDirection` enum (LTR, RTL) above `makeAndSortLines`
+2. Add `detectLineDirection()` helper that counts strong RTL vs LTR characters
+3. Add `compareTinyTextEntityXReverse()` comparator
+4. Modify the sort loop in `makeAndSortLines` (line 1115-1117) to choose comparator based on detected direction
+
+**Files to touch**:
+- `core/textpage.cpp` only
+
+**Testing**:
+- Build in the `okular-build` container
+- Test with the Persian PDF (mabahes-jozveh-v3.pdf) already in the vnc container
+- Run existing `searchtest` and `calculatetexttest` to ensure no regressions
+
+**Work started**: 2026-07-24 16:50
+
+### Step 8 — Implementation complete
+**Date:** 2026-07-24
+**Status:** BUILT and VERIFIED in vnc container
+
+**Code changes**:
+- `core/textpage.cpp`: +60 lines, -1 line
+  - Added `LineDirection` enum
+  - Added `detectLineDirection()` (counts RTL vs LTR chars per line)
+  - Added `compareTinyTextEntityXReverse()` (descending X)
+  - Modified `makeAndSortLines()` to choose comparator based on direction
+
+**Build**: 
+- Built `okularcore` and `okular` in the build container
+- Replaced `libOkular6Core.so.4.0.0`, `/usr/bin/okular`, and `okularpart.so` in vnc container
+
+**Test results**:
+- All regression tests pass (searchtest 13/13, calculatetexttest 3/3)
+- Single-word Persian: L→R drag now produces correct logical order `ش ب ی ه س ا ز ی` (was `ی ز ا س ه ی ب ش`)
+- Single-word Persian: R→L drag also produces correct logical order (same)
+- Multi-word Persian: selecting "شبیه‌سازی" + "کاربردهای" → `شبیه‌سازیکاربرده` (correct RTL word order!)
+- ZWNJ (zero-width non-joiner) preserved correctly between letters
+
+**What changed semantically**:
+- BEFORE: `m_words` was always sorted LTR spatially. For a Persian line, the rightmost word (first in reading) was at the END of the list.
+- AFTER: For RTL lines, words are sorted in reading order (rightmost on screen first). Now the first word in `m_words` for a Persian line is the first word in reading order.
+
+**Work committed**: 2026-07-24
