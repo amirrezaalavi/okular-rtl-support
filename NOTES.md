@@ -71,4 +71,26 @@ Top 3 to watch:
 5. Run regression tests
 6. Commit
 
-(To be filled in as I go)
+### Step 6 — Cross-checked with industry
+**Date:** 2026-07-24
+**Action:** Dispatched subagent to research other PDF readers.
+
+**Findings:**
+- **PDF.js** uses per-text-item `dir` field + browser native bidi. Full UBA in `bidi.js` (454 lines).
+- **Poppler** uses per-page `primaryLR` flag + `reorderText()` (only on CLI/findText). Qt6 binding is the broken path.
+- **MuPDF** has full UBA in C (~2000 lines of bidi code).
+- **Sumatra PDF** uses MuPDF + proper anchor/focus model (wordStart/wordEnd + PosBefore()).
+- **Evince** inherits Poppler behavior.
+
+**Key insight**: No major reader does what I was planning (reordering at storage layer). They either:
+1. Store per-item direction metadata (PDF.js)
+2. Branch the selection algorithm on per-page direction (Poppler)
+3. Reorder at read time (MuPDF)
+
+**Annotation impact**: ZERO. Annotations use plain `QString` + Qt's text engine. No interaction with `m_words`.
+
+**Revised recommendation**:
+- **v1**: per-line sort inversion (Option 4) — same plan, faster to ship
+- **v2**: per-TextEntity direction field — matches PDF.js, most correct
+
+The original plan still stands for v1. Industry research validated the approach direction.
