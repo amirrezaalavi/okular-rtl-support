@@ -2010,7 +2010,6 @@ Okular::TextPage *PDFGenerator::abstractTextPage(const std::vector<std::unique_p
             // We need: for each logical character position, what was
             // the visual character position.
             QVector<int> logicalCharToVisualChar(chars.size());
-            int logicalCharIdx = 0;
             int logicalQCharOffset = 0;
             for (int ci = 0; ci < chars.size(); ci++) {
                 // Map the first QChar of this character
