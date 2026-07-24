@@ -199,11 +199,22 @@ For the final output strings (returned from `TextPage::text()`), add Unicode bid
 
 ## Files to Modify
 
-| File | Function | Change |
-|------|----------|--------|
-| `core/textpage.cpp` | (new static function) | Add `reorderVisualToLogical()` |
-| `generators/poppler/generator_pdf.cpp` | `abstractTextPage()` | Apply reordering per word |
-| `generators/poppler/generator_pdf.cpp` | `exportTo()` | Apply reordering to text export |
+| File | Function | Change | Status |
+|------|----------|--------|--------|
+| `generators/poppler/generator_pdf.cpp` | (new static) | Add `reorderVisualToLogical()` and helpers | ✅ DONE |
+| `generators/poppler/generator_pdf.cpp` | `abstractTextPage()` | Apply reordering per word with bbox mapping | ✅ DONE |
+| `generators/poppler/generator_pdf.cpp` | `exportTo()` | NOT NEEDED: `pp->text()` already uses `reorderText()` | ❌ Skipped |
+
+### Implementation Status: Phase 1 Complete
+- Bidi reordering function implemented and tested
+- `abstractTextPage()` modified to reorder RTL text
+- Algorithm verified with Python test suite (7/7 + extended tests pass)
+- Character bounding box mapping verified
+
+### Next: Phase 2 — Compilation & Integration Testing
+- Install build dependencies
+- Compile Okular
+- Test with real RTL PDF documents
 
 ---
 
